@@ -1,0 +1,804 @@
+import React, { useState, useEffect } from 'react';
+import { Film, Plus, Trash2, Sparkles, List, Home, ThumbsUp, ThumbsDown, Lightbulb, BarChart3, Search, RefreshCw, Calendar, StickyNote, Play, Filter, X, Check } from 'lucide-react';
+
+const GENRES = ['Action', 'Comedy', 'Drama', 'Horror', 'Sci-Fi', 'Romance', 'Thriller', 'Documentary', 'Animation', 'Fantasy', 'Mystery', 'Adventure', 'Other'];
+
+const SAMPLE_MOVIES = [
+  { id: 1, title: 'The Shawshank Redemption', genre: 'Drama', rating: null, watched: false },
+  { id: 2, title: 'Inception', genre: 'Sci-Fi', rating: null, watched: false },
+  { id: 3, title: 'The Grand Budapest Hotel', genre: 'Comedy', rating: null, watched: false },
+  { id: 4, title: 'Get Out', genre: 'Horror', rating: null, watched: false },
+  { id: 5, title: 'Spirited Away', genre: 'Animation', rating: null, watched: false }
+];
+
+export default function MoviePicker() {
+  const [movies, setMovies] = useState([]);
+  const [newMovie, setNewMovie] = useState('');
+  const [selectedGenre, setSelectedGenre] = useState('');
+  const [streamingInfo, setStreamingInfo] = useState('');
+  const [filterGenre, setFilterGenre] = useState('All');
+  const [hideWatched, setHideWatched] = useState(false);
+  const [recommendation, setRecommendation] = useState(null);
+  const [suggestions, setSuggestions] = useState([]);
+  const [recentPicks, setRecentPicks] = useState([]);
+  const [watchHistory, setWatchHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState('home');
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState('date-desc');
+  const [toast, setToast] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [noteModal, setNoteModal] = useState(null);
+  const [tempNote, setTempNote] = useState('');
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
+  const loadData = async () => {
+    try {
+      const [moviesResult, historyResult, picksResult] = await Promise.all([
+        window.storage.get('movie-list').catch(() => null),
+        window.storage.get('watch-history').catch(() => null),
+        window.storage.get('recent-picks').catch(() => null)
+      ]);
+
+      if (moviesResult?.value) {
+        setMovies(JSON.parse(moviesResult.value));
+      } else {
+        setShowOnboarding(true);
+      }
+
+      if (historyResult?.value) {
+        setWatchHistory(JSON.parse(historyResult.value));
+      }
+
+      if (picksResult?.value) {
+        setRecentPicks(JSON.parse(picksResult.value));
+      }
+    } catch (error) {
+      console.log('Error loading data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveMovies = async (updatedMovies) => {
+    try {
+      await window.storage.set('movie-list', JSON.stringify(updatedMovies));
+    } catch (error) {
+      showToast('Failed to save', 'error');
+    }
+  };
+
+  const saveHistory = async (history) => {
+    try {
+      await window.storage.set('watch-history', JSON.stringify(history));
+    } catch (error) {
+      console.error('Failed to save history');
+    }
+  };
+
+  const saveRecentPicks = async (picks) => {
+    try {
+      await window.storage.set('recent-picks', JSON.stringify(picks));
+    } catch (error) {
+      console.error('Failed to save picks');
+    }
+  };
+
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+  };
+
+  const addSampleMovies = () => {
+    const moviesWithIds = SAMPLE_MOVIES.map(m => ({ ...m, id: Date.now() + Math.random() }));
+    setMovies(moviesWithIds);
+    saveMovies(moviesWithIds);
+    setShowOnboarding(false);
+    showToast('Sample movies added!');
+  };
+
+  const skipOnboarding = () => {
+    setShowOnboarding(false);
+    setCurrentPage('movies');
+  };
+
+  const addMovie = () => {
+    if (newMovie.trim() && selectedGenre) {
+      const movie = { 
+        id: Date.now(), 
+        title: newMovie.trim(),
+        genre: selectedGenre,
+        streaming: streamingInfo.trim(),
+        rating: null,
+        watched: false,
+        notes: '',
+        dateAdded: new Date().toISOString()
+      };
+      const updatedMovies = [...movies, movie];
+      setMovies(updatedMovies);
+      saveMovies(updatedMovies);
+      setNewMovie('');
+      setSelectedGenre('');
+      setStreamingInfo('');
+      showToast(`Added "${movie.title}"!`);
+    }
+  };
+
+  const deleteMovie = (id) => {
+    const movie = movies.find(m => m.id === id);
+    const updatedMovies = movies.filter(m => m.id !== id);
+    setMovies(updatedMovies);
+    saveMovies(updatedMovies);
+    setDeleteConfirm(null);
+    showToast(`Deleted "${movie.title}"`);
+    if (recommendation?.id === id) {
+      setRecommendation(null);
+      setSuggestions([]);
+    }
+  };
+
+  const getRecommendation = () => {
+    let filteredMovies = movies;
+    
+    if (filterGenre !== 'All') {
+      filteredMovies = filteredMovies.filter(m => m.genre === filterGenre);
+    }
+    
+    if (hideWatched) {
+      filteredMovies = filteredMovies.filter(m => !m.watched);
+    }
+
+    // Avoid recent picks
+    const recentIds = recentPicks.slice(0, 3).map(p => p.id);
+    const nonRecentMovies = filteredMovies.filter(m => !recentIds.includes(m.id));
+    const pool = nonRecentMovies.length > 0 ? nonRecentMovies : filteredMovies;
+
+    if (pool.length === 0) {
+      showToast('No movies match your filters!', 'error');
+      return;
+    }
+
+    // Weight by ratings
+    const likedMovies = pool.filter(m => m.rating === 'liked');
+    const neutralMovies = pool.filter(m => !m.rating);
+    const weightedPool = [...likedMovies, ...likedMovies, ...neutralMovies];
+    
+    const randomIndex = Math.floor(Math.random() * weightedPool.length);
+    const picked = weightedPool[randomIndex];
+    
+    setRecommendation(picked);
+    setSuggestions([]);
+    
+    const newPicks = [{ id: picked.id, date: new Date().toISOString() }, ...recentPicks].slice(0, 10);
+    setRecentPicks(newPicks);
+    saveRecentPicks(newPicks);
+  };
+
+  const markWatched = async (movieId, liked) => {
+    const movie = movies.find(m => m.id === movieId);
+    const updatedMovies = movies.map(m => 
+      m.id === movieId ? { ...m, rating: liked ? 'liked' : 'disliked', watched: true } : m
+    );
+    setMovies(updatedMovies);
+    saveMovies(updatedMovies);
+    
+    const historyEntry = {
+      id: Date.now(),
+      movieId,
+      title: movie.title,
+      genre: movie.genre,
+      rating: liked ? 'liked' : 'disliked',
+      date: new Date().toISOString(),
+      notes: movie.notes || ''
+    };
+    
+    const newHistory = [historyEntry, ...watchHistory];
+    setWatchHistory(newHistory);
+    saveHistory(newHistory);
+    
+    if (recommendation?.id === movieId) {
+      setRecommendation({ ...recommendation, rating: liked ? 'liked' : 'disliked', watched: true });
+    }
+
+    showToast(liked ? '❤️ Added to favorites!' : 'Marked as watched');
+
+    if (liked) {
+      await getSuggestions(movie);
+    }
+  };
+
+  const getSuggestions = async (movie) => {
+    setLoadingSuggestions(true);
+    try {
+      const likedMovies = movies.filter(m => m.rating === 'liked');
+      const likedTitles = likedMovies.map(m => m.title).join(', ');
+      
+      const prompt = `Based on the movie "${movie.title}" (${movie.genre}), and considering the user has also liked: ${likedTitles || 'no other movies yet'}, suggest 3 similar movies they might enjoy. For each suggestion, provide just the title and a brief one-sentence reason. Format ONLY as a JSON array with objects containing "title" and "reason" fields. No other text.`;
+
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          messages: [{ role: "user", content: prompt }]
+        })
+      });
+
+      const data = await response.json();
+      const text = data.content[0].text;
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        setSuggestions(JSON.parse(jsonMatch[0]));
+      }
+    } catch (error) {
+      console.error('Failed to get suggestions:', error);
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const addNote = (movieId) => {
+    const movie = movies.find(m => m.id === movieId);
+    setNoteModal(movie);
+    setTempNote(movie.notes || '');
+  };
+
+  const saveNote = () => {
+    const updatedMovies = movies.map(m => 
+      m.id === noteModal.id ? { ...m, notes: tempNote } : m
+    );
+    setMovies(updatedMovies);
+    saveMovies(updatedMovies);
+    setNoteModal(null);
+    setTempNote('');
+    showToast('Note saved!');
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center">
+        <div className="text-white text-xl">Loading your collection...</div>
+      </div>
+    );
+  }
+
+  if (showOnboarding) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white/10 backdrop-blur-lg rounded-3xl p-8 shadow-2xl border border-white/20 text-center">
+          <Film className="w-20 h-20 text-yellow-400 mx-auto mb-6" />
+          <h1 className="text-4xl font-bold text-white mb-4">Welcome to Movie Picker!</h1>
+          <p className="text-blue-200 mb-8 text-lg">Never struggle to choose a movie again. Build your collection and let us pick the perfect film for tonight.</p>
+          <div className="space-y-3">
+            <button
+              onClick={addSampleMovies}
+              className="w-full py-4 bg-gradient-to-r from-yellow-400 to-orange-400 hover:from-yellow-500 hover:to-orange-500 text-purple-900 font-bold text-lg rounded-xl shadow-lg transition-all transform hover:scale-105"
+            >
+              Start with Sample Movies
+            </button>
+            <button
+              onClick={skipOnboarding}
+              className="w-full py-4 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-xl transition-colors"
+            >
+              Start from Scratch
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const HomePage = () => {
+    const genreCounts = GENRES.reduce((acc, genre) => {
+      acc[genre] = movies.filter(m => m.genre === genre && (!hideWatched || !m.watched)).length;
+      return acc;
+    }, {});
+
+    return (
+      <div className="max-w-2xl mx-auto">
+        <div className="text-center mb-8">
+          <div className="flex items-center justify-center gap-3 mb-3">
+            <Film className="w-10 h-10 text-yellow-400" />
+            <h1 className="text-4xl font-bold text-white">Movie Picker</h1>
+          </div>
+          <p className="text-blue-200">Your personal movie recommendation engine</p>
+        </div>
+
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-6 shadow-2xl border border-white/20 space-y-4">
+          <div>
+            <label className="block text-white font-semibold mb-3">Filter by Genre:</label>
+            <select
+              value={filterGenre}
+              onChange={(e) => setFilterGenre(e.target.value)}
+              className="w-full px-4 py-3 rounded-lg bg-white/20 border border-white/30 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400"
+            >
+              <option value="All">All Genres ({movies.filter(m => !hideWatched || !m.watched).length})</option>
+              {GENRES.map(genre => (
+                <option key={genre} value={genre} disabled={genreCounts[genre] === 0}>
+                  {genre} ({genreCounts[genre]})
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          <label className="flex items-center gap-3 text-white cursor-pointer">
+            <input
+              type="checkbox"
+              checked={hideWatched}
+              onChange={(e) => setHideWatched(e.target.checked)}
+              className="w-5 h-5 rounded"
+            />
+            <span>Hide watched movies</span>
+          </label>
+        </div>
+
+        <button
+          onClick={getRecommendation}
+          disabled={movies.length === 0}
+          className="w-full py-4 bg-gradient-to-r from-pink-500 to-purple-500 hover:from-pink-600 hover:to-purple-600 disabled:from-gray-500 disabled:to-gray-600 text-white font-bold text-lg rounded-xl shadow-lg transition-all transform hover:scale-105 disabled:hover:scale-100 disabled:cursor-not-allowed mb-6"
+        >
+          {movies.length === 0 ? 'Add movies to get started' : '🎬 Pick a Movie!'}
+        </button>
+
+        {recommendation && (
+          <div className="space-y-4 animate-fadeIn">
+            <div className="bg-gradient-to-r from-yellow-400 to-orange-400 rounded-2xl p-8 shadow-2xl">
+              <Sparkles className="w-12 h-12 mx-auto mb-3 text-purple-900" />
+              <h2 className="text-2xl font-bold text-purple-900 mb-2 text-center">Tonight's Pick:</h2>
+              <p className="text-3xl font-bold text-white mb-3 text-center">{recommendation.title}</p>
+              <div className="flex justify-center gap-2 flex-wrap">
+                <span className="px-4 py-1 bg-purple-900 text-white rounded-full text-sm font-semibold">
+                  {recommendation.genre}
+                </span>
+                {recommendation.streaming && (
+                  <span className="px-4 py-1 bg-purple-900/80 text-white rounded-full text-sm flex items-center gap-1">
+                    <Play className="w-3 h-3" />
+                    {recommendation.streaming}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              {!recommendation.watched && (
+                <div className="flex-1 bg-white/10 backdrop-blur-lg rounded-xl p-4 shadow-xl border border-white/20">
+                  <p className="text-white text-center mb-3 font-semibold text-sm">How was it?</p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => markWatched(recommendation.id, true)}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-lg transition-all transform hover:scale-105"
+                    >
+                      <ThumbsUp className="w-4 h-4" />
+                      Loved it!
+                    </button>
+                    <button
+                      onClick={() => markWatched(recommendation.id, false)}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg transition-all transform hover:scale-105"
+                    >
+                      <ThumbsDown className="w-4 h-4" />
+                      Meh
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              <button
+                onClick={getRecommendation}
+                className="px-6 py-3 bg-white/10 hover:bg-white/20 backdrop-blur-lg text-white font-semibold rounded-xl transition-all border border-white/20 flex items-center gap-2"
+              >
+                <RefreshCw className="w-5 h-5" />
+                Pick Another
+              </button>
+            </div>
+
+            {loadingSuggestions && (
+              <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 shadow-xl border border-white/20 text-center">
+                <p className="text-white">Finding similar movies...</p>
+              </div>
+            )}
+
+            {suggestions.length > 0 && (
+              <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 shadow-xl border border-white/20 animate-fadeIn">
+                <div className="flex items-center gap-2 mb-4">
+                  <Lightbulb className="w-6 h-6 text-yellow-400" />
+                  <h3 className="text-xl font-bold text-white">You might also like:</h3>
+                </div>
+                <div className="space-y-3">
+                  {suggestions.map((sug, idx) => (
+                    <div key={idx} className="bg-white/10 p-4 rounded-lg hover:bg-white/15 transition-colors">
+                      <p className="text-white font-semibold mb-1">{sug.title}</p>
+                      <p className="text-blue-200 text-sm">{sug.reason}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const StatsPage = () => {
+    const totalMovies = movies.length;
+    const watchedCount = movies.filter(m => m.watched).length;
+    const likedCount = movies.filter(m => m.rating === 'liked').length;
+    const genreBreakdown = GENRES.map(genre => ({
+      genre,
+      count: movies.filter(m => m.genre === genre).length
+    })).filter(g => g.count > 0).sort((a, b) => b.count - a.count);
+
+    const topGenre = genreBreakdown[0]?.genre || 'None yet';
+    const recentlyWatched = watchHistory.slice(0, 5);
+
+    return (
+      <div className="max-w-4xl mx-auto">
+        <h1 className="text-3xl font-bold text-white mb-6 text-center">Your Stats</h1>
+        
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="bg-gradient-to-br from-purple-500 to-purple-700 rounded-2xl p-6 shadow-xl text-center">
+            <Film className="w-10 h-10 text-white mx-auto mb-2" />
+            <div className="text-4xl font-bold text-white mb-1">{totalMovies}</div>
+            <div className="text-purple-200">Total Movies</div>
+          </div>
+          
+          <div className="bg-gradient-to-br from-green-500 to-green-700 rounded-2xl p-6 shadow-xl text-center">
+            <ThumbsUp className="w-10 h-10 text-white mx-auto mb-2" />
+            <div className="text-4xl font-bold text-white mb-1">{likedCount}</div>
+            <div className="text-green-200">Favorites</div>
+          </div>
+          
+          <div className="bg-gradient-to-br from-blue-500 to-blue-700 rounded-2xl p-6 shadow-xl text-center">
+            <Calendar className="w-10 h-10 text-white mx-auto mb-2" />
+            <div className="text-4xl font-bold text-white mb-1">{watchedCount}</div>
+            <div className="text-blue-200">Watched</div>
+          </div>
+        </div>
+
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-6 shadow-2xl border border-white/20">
+          <h2 className="text-xl font-bold text-white mb-4">Genre Breakdown</h2>
+          <div className="space-y-3">
+            {genreBreakdown.map(({ genre, count }) => (
+              <div key={genre}>
+                <div className="flex justify-between text-white mb-1">
+                  <span>{genre}</span>
+                  <span className="font-semibold">{count}</span>
+                </div>
+                <div className="w-full bg-white/20 rounded-full h-2">
+                  <div
+                    className="bg-yellow-400 h-2 rounded-full transition-all"
+                    style={{ width: `${(count / totalMovies) * 100}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+          {genreBreakdown.length === 0 && (
+            <p className="text-blue-200 text-center py-4">No movies yet!</p>
+          )}
+        </div>
+
+        {recentlyWatched.length > 0 && (
+          <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 shadow-2xl border border-white/20">
+            <h2 className="text-xl font-bold text-white mb-4">Recently Watched</h2>
+            <div className="space-y-3">
+              {recentlyWatched.map((entry) => (
+                <div key={entry.id} className="bg-white/10 p-4 rounded-lg flex items-center justify-between">
+                  <div>
+                    <p className="text-white font-semibold">{entry.title}</p>
+                    <p className="text-blue-200 text-sm">{new Date(entry.date).toLocaleDateString()}</p>
+                  </div>
+                  {entry.rating === 'liked' ? (
+                    <ThumbsUp className="w-5 h-5 text-green-400" />
+                  ) : (
+                    <ThumbsDown className="w-5 h-5 text-red-400" />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const MoviesPage = () => {
+    let filteredMovies = movies;
+    
+    if (searchQuery) {
+      filteredMovies = filteredMovies.filter(m => 
+        m.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        m.genre.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+
+    const sortedMovies = [...filteredMovies].sort((a, b) => {
+      switch (sortBy) {
+        case 'title': return a.title.localeCompare(b.title);
+        case 'genre': return a.genre.localeCompare(b.genre);
+        case 'date-desc': return new Date(b.dateAdded) - new Date(a.dateAdded);
+        case 'date-asc': return new Date(a.dateAdded) - new Date(b.dateAdded);
+        default: return 0;
+      }
+    });
+
+    const moviesByGenre = GENRES.reduce((acc, genre) => {
+      acc[genre] = sortedMovies.filter(m => m.genre === genre);
+      return acc;
+    }, {});
+
+    return (
+      <div className="max-w-4xl mx-auto">
+        <h1 className="text-3xl font-bold text-white mb-6 text-center">My Collection</h1>
+        
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-6 shadow-2xl border border-white/20">
+          <h2 className="text-xl font-semibold text-white mb-4">Add a Movie</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+            <input
+              type="text"
+              value={newMovie}
+              onChange={(e) => setNewMovie(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && selectedGenre && addMovie()}
+              placeholder="Movie title..."
+              className="px-4 py-3 rounded-lg bg-white/20 border border-white/30 text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-yellow-400"
+            />
+            <select
+              value={selectedGenre}
+              onChange={(e) => setSelectedGenre(e.target.value)}
+              className="px-4 py-3 rounded-lg bg-white/20 border border-white/30 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400"
+            >
+              <option value="">Select genre...</option>
+              {GENRES.map(genre => (
+                <option key={genre} value={genre}>{genre}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex gap-3">
+            <input
+              type="text"
+              value={streamingInfo}
+              onChange={(e) => setStreamingInfo(e.target.value)}
+              placeholder="Where to watch (optional)..."
+              className="flex-1 px-4 py-3 rounded-lg bg-white/20 border border-white/30 text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-yellow-400"
+            />
+            <button
+              onClick={addMovie}
+              disabled={!newMovie.trim() || !selectedGenre}
+              className="px-6 py-3 bg-yellow-400 hover:bg-yellow-500 disabled:bg-gray-500 text-purple-900 font-semibold rounded-lg transition-colors flex items-center gap-2"
+            >
+              <Plus className="w-5 h-5" />
+              Add
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-4 mb-6 shadow-2xl border border-white/20">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-white/60" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search movies..."
+                className="w-full pl-10 pr-4 py-2 rounded-lg bg-white/20 border border-white/30 text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-yellow-400"
+              />
+            </div>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="px-4 py-2 rounded-lg bg-white/20 border border-white/30 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400"
+            >
+              <option value="date-desc">Newest First</option>
+              <option value="date-asc">Oldest First</option>
+              <option value="title">Alphabetical</option>
+              <option value="genre">By Genre</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="space-y-6">
+          {GENRES.map(genre => {
+            const genreMovies = moviesByGenre[genre];
+            if (genreMovies.length === 0) return null;
+            
+            return (
+              <div key={genre} className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 shadow-2xl border border-white/20">
+                <h3 className="text-xl font-bold text-white mb-4">{genre} ({genreMovies.length})</h3>
+                <div className="space-y-2">
+                  {genreMovies.map(movie => (
+                    <div
+                      key={movie.id}
+                      className="bg-white/10 p-4 rounded-lg hover:bg-white/15 transition-colors"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <span className="text-white font-medium">{movie.title}</span>
+                            {movie.watched && (
+                              <span className="px-2 py-0.5 bg-blue-500/30 text-blue-200 rounded text-xs">Watched</span>
+                            )}
+                            {movie.rating === 'liked' && (
+                              <ThumbsUp className="w-4 h-4 text-green-400" />
+                            )}
+                            {movie.rating === 'disliked' && (
+                              <ThumbsDown className="w-4 h-4 text-red-400" />
+                            )}
+                          </div>
+                          {movie.streaming && (
+                            <p className="text-blue-200 text-sm flex items-center gap-1">
+                              <Play className="w-3 h-3" />
+                              {movie.streaming}
+                            </p>
+                          )}
+                          {movie.notes && (
+                            <p className="text-blue-200 text-sm mt-1 italic">"{movie.notes}"</p>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => addNote(movie.id)}
+                            className="text-blue-300 hover:text-blue-200 transition-colors"
+                            title="Add note"
+                          >
+                            <StickyNote className="w-5 h-5" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirm(movie)}
+                            className="text-red-400 hover:text-red-300 transition-colors"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          
+          {sortedMovies.length === 0 && (
+            <div className="text-center py-12">
+              <p className="text-blue-200 text-lg">
+                {searchQuery ? 'No movies match your search' : 'No movies yet. Add some above!'}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 p-4 md:p-6">
+      <div className="flex flex-wrap justify-center gap-3 mb-8">
+        <button
+          onClick={() => setCurrentPage('home')}
+          className={`flex items-center gap-2 px-4 md:px-6 py-3 rounded-lg font-semibold transition-all ${
+            currentPage === 'home'
+              ? 'bg-yellow-400 text-purple-900 shadow-lg'
+              : 'bg-white/10 text-white hover:bg-white/20'
+          }`}
+        >
+          <Home className="w-5 h-5" />
+          <span className="hidden sm:inline">Home</span>
+        </button>
+        <button
+          onClick={() => setCurrentPage('movies')}
+          className={`flex items-center gap-2 px-4 md:px-6 py-3 rounded-lg font-semibold transition-all ${
+            currentPage === 'movies'
+              ? 'bg-yellow-400 text-purple-900 shadow-lg'
+              : 'bg-white/10 text-white hover:bg-white/20'
+          }`}
+        >
+          <List className="w-5 h-5" />
+          <span className="hidden sm:inline">Movies</span> ({movies.length})
+        </button>
+        <button
+          onClick={() => setCurrentPage('stats')}
+          className={`flex items-center gap-2 px-4 md:px-6 py-3 rounded-lg font-semibold transition-all ${
+            currentPage === 'stats'
+              ? 'bg-yellow-400 text-purple-900 shadow-lg'
+              : 'bg-white/10 text-white hover:bg-white/20'
+          }`}
+        >
+          <BarChart3 className="w-5 h-5" />
+          <span className="hidden sm:inline">Stats</span>
+        </button>
+      </div>
+
+      {currentPage === 'home' && <HomePage />}
+      {currentPage === 'movies' && <MoviesPage />}
+      {currentPage === 'stats' && <StatsPage />}
+
+      {toast && (
+        <div className="fixed bottom-6 right-6 bg-white/95 backdrop-blur-lg text-purple-900 px-6 py-4 rounded-xl shadow-2xl border-2 border-purple-900 flex items-center gap-3 animate-fadeIn z-50">
+          {toast.type === 'success' ? (
+            <Check className="w-5 h-5 text-green-600" />
+          ) : (
+            <X className="w-5 h-5 text-red-600" />
+          )}
+          <span className="font-semibold">{toast.message}</span>
+        </div>
+      )}
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white/95 backdrop-blur-lg rounded-2xl p-8 max-w-md w-full shadow-2xl">
+            <h3 className="text-2xl font-bold text-purple-900 mb-3">Delete Movie?</h3>
+            <p className="text-gray-700 mb-6">
+              Are you sure you want to delete <strong>"{deleteConfirm.title}"</strong>? This cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="flex-1 px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => deleteMovie(deleteConfirm.id)}
+                className="flex-1 px-6 py-3 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {noteModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white/95 backdrop-blur-lg rounded-2xl p-8 max-w-md w-full shadow-2xl">
+            <h3 className="text-2xl font-bold text-purple-900 mb-3">Add Note</h3>
+            <p className="text-gray-700 mb-4 font-semibold">{noteModal.title}</p>
+            <textarea
+              value={tempNote}
+              onChange={(e) => setTempNote(e.target.value)}
+              placeholder="Your thoughts about this movie..."
+              className="w-full px-4 py-3 rounded-lg border-2 border-purple-200 focus:border-purple-500 focus:outline-none mb-4 min-h-32"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setNoteModal(null); setTempNote(''); }}
+                className="flex-1 px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveNote}
+                className="flex-1 px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg transition-colors"
+              >
+                Save Note
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fadeIn {
+          animation: fadeIn 0.3s ease-out;
+        }
+      `}</style>
+    </div>
+  );
+}
